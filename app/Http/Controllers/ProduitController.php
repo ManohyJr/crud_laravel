@@ -78,7 +78,7 @@ class ProduitController extends Controller
         DB::table('produits')->where('id', $id)->delete();
 
         return Redirect::route('articles.index')
-                       ->with('success', 'Article supprimé avec succès.');
+                       ->with('success', 'Articles supprimé avec succès.');
     }
 }
 
