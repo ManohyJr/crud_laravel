@@ -40,7 +40,6 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 Route::middleware('auth')->group(function () {
 Route::get('/articles', [ProduitController::class, 'index'])->name('articles.index');
 
-// Formulaire de création
 Route::get('/articles/create', [ProduitController::class, 'create'])->name('articles.create');
 
 // Stocker un nouvel article
