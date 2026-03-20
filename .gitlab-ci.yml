@@ -4,4 +4,4 @@ stages:
 test_job:
   stage: test
   script:
-    - echo "Mon premier pipeline"
+    - echo "CI/CD fonctionne !"
