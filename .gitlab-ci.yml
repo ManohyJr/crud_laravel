@@ -1,9 +1,7 @@
 stages:
   - test
-  - deploy
 
 variables:
-  # Variables globales
   MYSQL_ROOT_PASSWORD: secret
   MYSQL_DATABASE: laravel_test
   MYSQL_USER: laravel
@@ -15,14 +13,17 @@ variables:
   DB_USERNAME: laravel
   DB_PASSWORD: secret
 
-# Job pour lancer les tests
 test_job:
   stage: test
-  image: ghcr.io/laravelphp/php-fpm:8.3
+  image: php:8.3-fpm
   services:
     - name: mysql:8.0
       alias: mysql
   before_script:
+    - apt-get update && apt-get install -y unzip git curl libpng-dev libonig-dev libxml2-dev zip
+    - docker-php-ext-install pdo_mysql
+    - curl -sS https://getcomposer.org/installer | php
+    - mv composer.phar /usr/local/bin/composer
     - composer install --no-interaction --prefer-dist --optimize-autoloader
     - cp .env.example .env
     - php artisan key:generate
@@ -34,6 +35,3 @@ test_job:
     key: ${CI_COMMIT_REF_SLUG}
     paths:
       - vendor/
-  artifacts:
-    reports:
-      junit: storage/test-results/junit.xml
