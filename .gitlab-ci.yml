@@ -1,52 +1,56 @@
 stages:
+  - prepare
   - test
   - deploy
 
-image: php:8.3-fpm
+variables:
+  # Variables d'environnement Laravel
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_DATABASE: laravel_db
+  DB_USERNAME: root
+  DB_PASSWORD: secret
+  # Timeout pour attendre MySQL
+  WAIT_FOR_DB_TIMEOUT: 60
 
 services:
   - name: mysql:8.0
-    alias: db
-
-variables:
-  MYSQL_DATABASE: laravel_db
-  MYSQL_ROOT_PASSWORD: secret
-  MYSQL_USER: laravel_user
-  MYSQL_PASSWORD: secret
-  DB_HOST: db
-  DB_PORT: 3306
-  DB_DATABASE: laravel_db
-  DB_USERNAME: laravel_user
-  DB_PASSWORD: secret
-  COMPOSER_ALLOW_SUPERUSER: "1"
-  CI: "true"
+    alias: mysql
+    command: ["--default-authentication-plugin=mysql_native_password"]
 
 before_script:
-  # Installer les dépendances système nécessaires pour Laravel
-  - apt-get update && apt-get install -y unzip git curl libpng-dev libonig-dev libxml2-dev zip mysql-client
-  # Installer l’extension PDO MySQL
+  # Installer dépendances système et MariaDB client
+  - apt-get update && apt-get install -y unzip git curl libpng-dev libonig-dev libxml2-dev zip mariadb-client
+  # Installer l'extension PHP PDO MySQL
   - docker-php-ext-install pdo_mysql
-  # Attendre MySQL
-  - until mysqladmin ping -h "$DB_HOST" --silent; do echo "Waiting for MySQL..."; sleep 1; done
   # Installer Composer
   - curl -sS https://getcomposer.org/installer | php
   - mv composer.phar /usr/local/bin/composer
-  # Installer dépendances Laravel
+  # Attendre que MySQL soit prêt
+  - |
+    echo "Waiting for MySQL to be ready..."
+    timeout=${WAIT_FOR_DB_TIMEOUT}
+    until mysqladmin ping -h "$DB_HOST" --silent; do
+      echo "MySQL is not ready yet..."
+      sleep 1
+      ((timeout--))
+      if [ $timeout -le 0 ]; then
+        echo "MySQL did not become ready in time."
+        exit 1
+      fi
+    done
+  - echo "MySQL is ready!"
+  # Installer les dépendances PHP du projet Laravel
   - composer install --no-interaction --prefer-dist
-  # Créer la base si elle n’existe pas
-  - mysql -h "$DB_HOST" -u "$MYSQL_USER" -p"$DB_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$DB_DATABASE\`;"
+  # Créer la base de données si elle n'existe pas
+  - mysql -h "$DB_HOST" -u "$DB_USERNAME" -p"$DB_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$DB_DATABASE\`;"
 
+# Job pour exécuter les tests Laravel
 test:
   stage: test
   script:
     - php artisan migrate --force
     - php artisan test
-  artifacts:
-    paths:
-      - storage/logs/
-      - vendor/
-
-deploy:
-  stage: deploy
-  script:
-    - echo "Déploiement ici (simulateur ou vrai serveur)"
+  only:
+    - ajout_ci_cd
