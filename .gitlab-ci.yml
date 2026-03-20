@@ -11,7 +11,7 @@ variables:
   DB_PASSWORD: laravel_pass
 
 # === Stage setup: installer PHP, extensions et dépendances ===
-setup:
+setup_job:
   stage: setup
   image: php:8.3-fpm
   services:
@@ -41,7 +41,7 @@ setup:
     - echo "Setup completed"
 
 # === Stage test: exécuter les tests Laravel ===
-test:
+test_job:
   stage: test
   image: php:8.3-fpm
   services:
