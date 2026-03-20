@@ -1,51 +1,49 @@
-image: php:8.3-fpm-bullseye # Utilisation de Bullseye (Debian 11) pour coller à ton OS
-
 stages:
-  - build
+  - setup
   - test
-  - docker_check
-
-# Cache pour accélérer les installations de Composer
-cache:
-  paths:
-    - vendor/
 
 variables:
-  MYSQL_DATABASE: testing
-  MYSQL_ROOT_PASSWORD: root
-  DB_HOST: mysql
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_DATABASE: laravel_test
+  DB_USERNAME: postgres
+  DB_PASSWORD: secret
 
-before_script:
-  - apt-get update -yqq
-  - apt-get install -yqq libpq-dev libzip-dev zip unzip git mariadb-client
-  - docker-php-ext-install pdo_mysql zip
-  - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+services:
+  - name: postgres:15
+    alias: postgres
 
-install_dependencies:
-  stage: build
+setup:
+  stage: setup
+  image: php:8.3-fpm-bullseye
+  before_script:
+    - apt-get update -yqq
+    - apt-get install -yqq libpq-dev zip unzip git
+    - docker-php-ext-install pdo_pgsql zip
+    - composer install --no-interaction --prefer-dist --optimize-autoloader
+    # Attendre que PostgreSQL soit prêt
+    - |
+      until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME"; do
+        echo "Waiting for PostgreSQL..."
+        sleep 2
+      done
   script:
-    - composer install --prefer-dist --no-ansi --no-interaction --no-progress
-  artifacts:
-    paths:
-      - vendor/
-    expire_in: 1 hour
+    - echo "Setup complete"
 
-run_tests:
+test:
   stage: test
-  services:
-    - mysql:8.0
-  dependencies:
-    - install_dependencies
+  image: php:8.3-fpm-bullseye
+  before_script:
+    - apt-get update -yqq
+    - apt-get install -yqq libpq-dev zip unzip git
+    - docker-php-ext-install pdo_pgsql zip
+    - composer install --no-interaction --prefer-dist --optimize-autoloader
+    - |
+      until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME"; do
+        echo "Waiting for PostgreSQL..."
+        sleep 2
+      done
   script:
-    - cp .env.example .env.testing
-    - php artisan key:generate --env=testing
-    - php artisan migrate --env=testing --force
-    - php artisan test
-
-check_docker_build:
-  stage: docker_check
-  image: docker:latest
-  services:
-    - docker:dind
-  script:
-    - docker build -t laravelfirst:test .
+    - php artisan migrate --force
+    - php artisan test --parallel
