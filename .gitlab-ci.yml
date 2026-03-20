@@ -1,49 +1,49 @@
+image: php:8.3-fpm-bullseye
+
 stages:
-  - setup
+  - build
   - test
 
 variables:
+  # Correction PostgreSQL : On définit le mot de passe obligatoire
+  POSTGRES_DB: testing
+  POSTGRES_PASSWORD: root
+  # Configuration Laravel pour PostgreSQL
   DB_CONNECTION: pgsql
   DB_HOST: postgres
   DB_PORT: 5432
-  DB_DATABASE: laravel_test
+  DB_DATABASE: testing
   DB_USERNAME: postgres
-  DB_PASSWORD: secret
+  DB_PASSWORD: root
 
-services:
-  - name: postgres:15
-    alias: postgres
+cache:
+  paths:
+    - vendor/
 
-setup:
-  stage: setup
-  image: php:8.3-fpm-bullseye
-  before_script:
-    - apt-get update -yqq
-    - apt-get install -yqq libpq-dev zip unzip git
-    - docker-php-ext-install pdo_pgsql zip
-    - composer install --no-interaction --prefer-dist --optimize-autoloader
-    # Attendre que PostgreSQL soit prêt
-    - |
-      until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME"; do
-        echo "Waiting for PostgreSQL..."
-        sleep 2
-      done
+before_script:
+  - apt-get update -yqq
+  - apt-get install -yqq libpq-dev libzip-dev zip unzip git
+  - docker-php-ext-install pdo_pgsql zip
+  - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+install_dependencies:
+  stage: build
   script:
-    - echo "Setup complete"
+    - composer install --prefer-dist --no-ansi --no-interaction --no-progress
+  artifacts:
+    paths:
+      - vendor/
+    expire_in: 1 hour
 
-test:
+run_tests:
   stage: test
-  image: php:8.3-fpm-bullseye
-  before_script:
-    - apt-get update -yqq
-    - apt-get install -yqq libpq-dev zip unzip git
-    - docker-php-ext-install pdo_pgsql zip
-    - composer install --no-interaction --prefer-dist --optimize-autoloader
-    - |
-      until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME"; do
-        echo "Waiting for PostgreSQL..."
-        sleep 2
-      done
+  services:
+    # On utilise le service postgres (assure-toi que c'est bien pgsql que tu veux)
+    - postgres:15
+  dependencies:
+    - install_dependencies
   script:
-    - php artisan migrate --force
-    - php artisan test --parallel
+    - cp .env.example .env.testing
+    - php artisan key:generate --env=testing
+    - php artisan migrate --env=testing --force
+    - php artisan test
