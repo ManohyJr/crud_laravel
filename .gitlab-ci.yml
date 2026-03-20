@@ -1,52 +1,29 @@
-stages:
-  - prepare
-  - test
-  - deploy
-
-variables:
-  # Variables d'environnement Laravel
-  DB_CONNECTION: mysql
-  DB_HOST: mysql
-  DB_PORT: 3306
-  DB_DATABASE: laravel_db
-  DB_USERNAME: root
-  DB_PASSWORD: secret
-  # Timeout pour attendre MySQL
-  WAIT_FOR_DB_TIMEOUT: 60
+image: php:8.3-fpm
 
 services:
   - name: mysql:8.0
     alias: mysql
     command: ["--default-authentication-plugin=mysql_native_password"]
 
+stages:
+  - test
+
+variables:
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_DATABASE: laravel_db
+  DB_USERNAME: root
+  DB_PASSWORD: secret
+
 before_script:
-  # Installer dépendances système et MariaDB client
   - apt-get update && apt-get install -y unzip git curl libpng-dev libonig-dev libxml2-dev zip mariadb-client
-  # Installer l'extension PHP PDO MySQL
   - docker-php-ext-install pdo_mysql
-  # Installer Composer
   - curl -sS https://getcomposer.org/installer | php
   - mv composer.phar /usr/local/bin/composer
-  # Attendre que MySQL soit prêt
-  - |
-    echo "Waiting for MySQL to be ready..."
-    timeout=${WAIT_FOR_DB_TIMEOUT}
-    until mysqladmin ping -h "$DB_HOST" --silent; do
-      echo "MySQL is not ready yet..."
-      sleep 1
-      ((timeout--))
-      if [ $timeout -le 0 ]; then
-        echo "MySQL did not become ready in time."
-        exit 1
-      fi
-    done
-  - echo "MySQL is ready!"
-  # Installer les dépendances PHP du projet Laravel
   - composer install --no-interaction --prefer-dist
-  # Créer la base de données si elle n'existe pas
   - mysql -h "$DB_HOST" -u "$DB_USERNAME" -p"$DB_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$DB_DATABASE\`;"
 
-# Job pour exécuter les tests Laravel
 test:
   stage: test
   script:
