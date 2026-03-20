@@ -1,4 +1,5 @@
 stages:
+  - setup
   - test
 
 variables:
@@ -8,9 +9,39 @@ variables:
   DB_DATABASE: laravel_test
   DB_USERNAME: laravel_user
   DB_PASSWORD: laravel_pass
-  DEBIAN_FRONTEND: noninteractive
 
-test_job:
+# === Stage setup: installer PHP, extensions et dépendances ===
+setup:
+  stage: setup
+  image: php:8.3-fpm
+  services:
+    - name: mysql:8.0
+      alias: mysql
+      command: ["--default-authentication-plugin=mysql_native_password"]
+      variables:
+        MYSQL_ROOT_PASSWORD: rootpassword
+        MYSQL_DATABASE: laravel_test
+        MYSQL_USER: laravel_user
+        MYSQL_PASSWORD: laravel_pass
+      healthcheck:
+        test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+        interval: 5s
+        retries: 30
+  before_script:
+    - apt-get update && apt-get install -y unzip git curl libpng-dev libonig-dev libxml2-dev zip mariadb-client
+    - docker-php-ext-install pdo_mysql
+    - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+    # attendre que MySQL soit prêt
+    - until mysql -h"$DB_HOST" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1" >/dev/null 2>&1; do
+        echo "Waiting for MySQL to be ready...";
+        sleep 5;
+      done
+    - composer install --no-interaction
+  script:
+    - echo "Setup completed"
+
+# === Stage test: exécuter les tests Laravel ===
+test:
   stage: test
   image: php:8.3-fpm
   services:
@@ -22,15 +53,15 @@ test_job:
         MYSQL_DATABASE: laravel_test
         MYSQL_USER: laravel_user
         MYSQL_PASSWORD: laravel_pass
-
+      healthcheck:
+        test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+        interval: 5s
+        retries: 30
   before_script:
-    - apt-get update && apt-get install -y unzip git curl libpng-dev libonig-dev libxml2-dev zip mariadb-client
-    - docker-php-ext-install pdo_mysql
-    - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-    - composer install --no-interaction --prefer-dist
-    - until mysql -h"$DB_HOST" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1" >/dev/null 2>&1; do echo "Waiting for MySQL..."; sleep 2; done
-    - php artisan key:generate
-    - php artisan migrate --force
-
+    - until mysql -h"$DB_HOST" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1" >/dev/null 2>&1; do
+        echo "Waiting for MySQL to be ready...";
+        sleep 5;
+      done
   script:
+    - php artisan migrate --force
     - php artisan test
