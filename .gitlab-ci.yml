@@ -1,49 +1,59 @@
-image: php:8.3-fpm-bullseye
+# .gitlab-ci.yml pour Laravel 10 - setup + test
 
 stages:
-  - build
+  - setup
   - test
 
 variables:
-  # Correction PostgreSQL : On définit le mot de passe obligatoire
-  POSTGRES_DB: testing
-  POSTGRES_PASSWORD: root
-  # Configuration Laravel pour PostgreSQL
-  DB_CONNECTION: pgsql
-  DB_HOST: postgres
-  DB_PORT: 5432
-  DB_DATABASE: testing
-  DB_USERNAME: postgres
-  DB_PASSWORD: root
+  # Pour éviter de mettre en dur le mot de passe de la DB
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_DATABASE: laravel
+  DB_USERNAME: root
+  DB_PASSWORD: secret
+  # Timeout pour composer
+  COMPOSER_MEMORY_LIMIT: -1
 
-cache:
-  paths:
-    - vendor/
+# Service MySQL pour les tests
+services:
+  - name: mysql:8.0
+    alias: mysql
+    command:
+      [
+        "--default-authentication-plugin=mysql_native_password",
+        "--character-set-server=utf8mb4",
+        "--collation-server=utf8mb4_unicode_ci"
+      ]
 
-before_script:
-  - apt-get update -yqq
-  - apt-get install -yqq libpq-dev libzip-dev zip unzip git
-  - docker-php-ext-install pdo_pgsql zip
-  - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-
-install_dependencies:
-  stage: build
+# Stage setup
+setup:
+  stage: setup
+  image: php:8.2 # image officielle PHP
+  before_script:
+    - apt-get update && apt-get install -y unzip git curl libzip-dev
+    - docker-php-ext-install pdo pdo_mysql zip
+    - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+    - cp .env.example .env
+    - composer install --no-interaction --prefer-dist
+    # Attendre que MySQL soit prêt
+    - until mysql -h "$DB_HOST" -u "$DB_USERNAME" -p"$DB_PASSWORD" -e "show databases;" ; do sleep 2; done
+    - php artisan key:generate
+    - php artisan migrate --force
   script:
-    - composer install --prefer-dist --no-ansi --no-interaction --no-progress
-  artifacts:
-    paths:
-      - vendor/
-    expire_in: 1 hour
+    - echo "Setup terminé avec succès"
 
-run_tests:
+# Stage test
+test:
   stage: test
-  services:
-    # On utilise le service postgres (assure-toi que c'est bien pgsql que tu veux)
-    - postgres:15
+  image: php:8.2
   dependencies:
-    - install_dependencies
+    - setup
+  before_script:
+    - apt-get update && apt-get install -y unzip git curl libzip-dev
+    - docker-php-ext-install pdo pdo_mysql zip
+    - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+    - cp .env.example .env
+    - composer install --no-interaction --prefer-dist
   script:
-    - cp .env.example .env.testing
-    - php artisan key:generate --env=testing
-    - php artisan migrate --env=testing --force
-    - php artisan test
+    - php artisan test --parallel
