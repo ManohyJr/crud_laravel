@@ -5,15 +5,15 @@ stages:
 
 build_job:
   stage: build
-  script: 
-   -echo "build réussi"
+  script:
+    - echo "Build en cours..."
 
 test_job:
   stage: test
   script:
-    - echo "intégration terminé!"
+    - echo "Tests en cours..."
 
 deploy_job:
   stage: deploy
   script:
-    - echo "deployement terminé"
+    - echo "Déploiement..."
