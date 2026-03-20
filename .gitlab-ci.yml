@@ -1,19 +1,41 @@
+image: php:8.3
+
 stages:
-  - build
+  #- build
+  - setup
   - test
-  - deploy
+  #- deploy
+before_script:
+  - apt-get update && apt-get install -y unzip git curl mysql-client
+  - curl -sS https://getcomposer.org/installer | php
+  - mv composer.phar /usr/local/bin/composer
+
+cache:
+  paths:
+    - vendor/
 
 build_job:
-  stage: build
+  stage: setup
   script:
-    - echo "Build en cours..."
+    - composer install
 
 test_job:
   stage: test
+  services:
+    - mysql:8.0
+  variables:
+    MYSQL_ROOT_PASSWORD: secret
+    MYSQL_DATABASE: laravel_test
+    MYSQL_USER: laravel
+    MYSQL_PASSWORD: secret
   script:
-    - echo "Tests en cours..."
-
-deploy_job:
-  stage: deploy
-  script:
-    - echo "Déploiement..."
+    - cp .env.example .env
+    - sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=mysql/' .env
+    - sed -i 's/DB_HOST=.*/DB_HOST=mysql/' .env
+    - sed -i 's/DB_PORT=.*/DB_PORT=3306/' .env
+    - sed -i 's/DB_DATABASE=.*/DB_DATABASE=laravel_test/' .env
+    - sed -i 's/DB_USERNAME=.*/DB_USERNAME=laravel/' .env
+    - sed -i 's/DB_PASSWORD=.*/DB_PASSWORD=secret/' .env
+    - php artisan key:generate
+    - php artisan migrate --force
+    - php artisan test
