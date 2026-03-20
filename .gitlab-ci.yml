@@ -1,7 +1,19 @@
 stages:
+  - build
   - test
+  - deploy
+
+build_job:
+  stage: build
+  script: 
+   -echo "build réussi"
 
 test_job:
   stage: test
   script:
-    - echo "CI/CD fonctionne !"
+    - echo "intégration terminé!"
+
+deploy_job:
+  stage: deploy
+  script:
+    - echo "deployement terminé"
