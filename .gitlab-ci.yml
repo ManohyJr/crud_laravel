@@ -1,0 +1,58 @@
+image: php:8.2-bullseye
+
+stages:
+  - build
+  - test
+
+variables:
+  # Ces variables sont globales
+  MYSQL_DATABASE: testing
+  MYSQL_ROOT_PASSWORD: root
+  # Configuration DB pour Laravel
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_DATABASE: testing
+  DB_USERNAME: root
+  DB_PASSWORD: root
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - vendor/
+
+before_script:
+  - apt-get update -yqq
+  - apt-get install -yqq libzip-dev zip unzip git mariadb-client
+  - docker-php-ext-install pdo_mysql zip > /dev/null 2>&1
+  - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer > /dev/null 2>&1
+
+install_dependencies:
+  stage: build
+  script:
+    - composer install --prefer-dist --no-ansi --no-interaction --no-progress
+  artifacts:
+    paths:
+      - vendor/
+    expire_in: 1 hour
+
+run_tests:
+  stage: test
+  services:
+    - name: mysql:8.0
+      alias: mysql
+  dependencies:
+    - install_dependencies
+  script:
+    # 1. Préparation de l'environnement
+    - cp .env.example .env.testing
+    - php artisan key:generate --env=testing
+    
+    # 2. ATTENTE DE MYSQL (Crucial pour éviter l'exit code 1)
+    - echo "Attente du démarrage de MySQL..."
+    - until mysqladmin ping -h"$DB_HOST" -u"$DB_USERNAME" -p"$DB_PASSWORD" --silent; do sleep 1; done
+    - echo "MySQL est prêt !"
+
+    # 3. Exécution avec plus de détails en cas d'erreur
+    - php artisan migrate --env=testing --force
+    - php artisan test --env=testing
