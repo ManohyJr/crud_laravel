@@ -1,47 +1,39 @@
 pipeline {
     agent any
 
-    options {
-        timeout(time: 15, unit: 'MINUTES')
-        timestamps()
-    }
-
     environment {
-        DB_ID  = "db-${env.BUILD_NUMBER}"
-        NET_ID = "net-${env.BUILD_NUMBER}"
-        // On définit l'image ici pour plus de clarté
-        PHP_IMG = "php:8.2-bullseye"
+        DB_ID   = "db-${env.BUILD_NUMBER}"
+        NET_ID  = "net-${env.BUILD_NUMBER}"
+        // Image déjà prête (extensions + composer inclus)
+        PHP_IMG = "thecodingmachine/php:8.2-v4-cli" 
     }
 
     stages {
-        stage('🚀 Setup & Test') {
+        stage('🚀 Quick Setup & Test') {
             steps {
                 withCredentials([string(credentialsId: 'laravel-db-password', variable: 'DB_PASS')]) {
                     script {
-                        echo "--- Initialisation du réseau et de MySQL ---"
+                        echo "--- Lancement rapide de l'infrastructure ---"
                         sh "docker network create ${NET_ID} || true"
                         sh "docker run -d --name ${DB_ID} --network ${NET_ID} -e MYSQL_ROOT_PASSWORD=${DB_PASS} -e MYSQL_DATABASE=testing mysql:8.0"
 
-                        echo "--- Lancement des tests dans le conteneur PHP ---"
-                        // On remplace docker.image().inside par un docker run --rm
                         sh """
                             docker run --rm --network ${NET_ID} \
-                                -v ${WORKSPACE}:/app \
-                                -w /app \
+                                -v ${WORKSPACE}:/var/www/html \
+                                -e DB_PASSWORD=${DB_PASS} \
                                 ${PHP_IMG} \
-                                sh -c '
-                                    apt-get update -qq && apt-get install -y -qq libzip-dev mariadb-client unzip > /dev/null
-                                    docker-php-ext-install pdo_mysql zip > /dev/null
-                                    curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+                                bash -c '
+                                    # Plus de apt-get ! Plus de docker-php-ext-install !
                                     
-                                    composer install --no-interaction --prefer-dist
+                                    composer install --no-interaction --prefer-dist --quiet
+                                    
                                     cp .env.example .env
                                     sed -i "s/DB_HOST=127.0.0.1/DB_HOST=${DB_ID}/" .env
                                     sed -i "s/DB_PASSWORD=/DB_PASSWORD=${DB_PASS}/" .env
-                                    php artisan key:generate
+                                    php artisan key:generate --quiet
 
-                                    echo "Attente MySQL..."
-                                    until mysqladmin ping -h${DB_ID} -uroot -p${DB_PASS} --silent; do sleep 3; done
+                                    echo "Vérification MySQL..."
+                                    timeout 30s bash -c "until timeout 1s bash -c \"cat < /dev/tcp/${DB_ID}/3306\" 2>/dev/null; do sleep 2; done"
 
                                     php artisan migrate --force
                                     php artisan test --without-tty
@@ -56,7 +48,6 @@ pipeline {
     post {
         always {
             script {
-                echo "--- Nettoyage ---"
                 sh "docker rm -f ${DB_ID} || true"
                 sh "docker network rm ${NET_ID} || true"
             }
