@@ -1,88 +1,76 @@
 pipeline {
-    // Utilisation d’un agent Jenkins disponible
     agent any
 
-    // Variables d'environnement globales
+    options {
+        timeout(time: 15, unit: 'MINUTES') // Évite les builds infinis
+        timestamps() // Ajoute l'heure devant chaque ligne de log
+        ansiColor('xterm') // Rend les logs plus lisibles (nécessite le plugin AnsiColor)
+    }
+
     environment {
-        APP_ENV         = 'testing'                        // Environnement Laravel pour les tests
-        DB_CONNECTION   = 'mysql'                          // Type de base de données
-        DB_HOST         = 'mysql-ci'                       // Nom du conteneur MySQL
-        DB_PORT         = '3306'                            // Port MySQL
-        DB_DATABASE     = 'testing'                        // Nom de la base de données de test
-        DB_USERNAME     = 'root'                           // Nom d’utilisateur MySQL
-        DB_PASSWORD     = credentials('jenkins-mysql-root-password') // Mot de passe MySQL depuis Jenkins credentials
-        DOCKER_NETWORK  = 'ci-network'                     // Réseau Docker pour connecter PHP et MySQL
-        MYSQL_CONTAINER = 'mysql-ci'                       // Nom du conteneur MySQL
+        // Identifiants uniques pour éviter les collisions entre builds parallèles
+        DB_ID           = "db-${env.BUILD_ID}"
+        NET_ID          = "net-${env.BUILD_ID}"
+        
+        // Configuration Laravel / DB
+        DB_PASSWORD     = credentials('jenkins-mysql-root-password')
+        APP_ENV         = 'testing'
+        DB_DATABASE     = 'testing'
+        DB_USERNAME     = 'root'
     }
 
     stages {
-
-        stage('Prepare Environment') {
+        stage('🚀 Infrastructure') {
             steps {
-                echo "Création du réseau Docker pour isoler les conteneurs..."
-                sh 'docker network create $DOCKER_NETWORK || true'
+                echo "--- Préparation du réseau isolé : ${env.NET_ID} ---"
+                sh "docker network create ${env.NET_ID}"
+                
+                echo "--- Lancement de MySQL 8.0 ---"
+                sh """
+                    docker run -d --name ${env.DB_ID} \
+                        --network ${env.NET_ID} \
+                        -e MYSQL_ROOT_PASSWORD=${env.DB_PASSWORD} \
+                        -e MYSQL_DATABASE=${env.DB_DATABASE} \
+                        mysql:8.0
+                """
             }
         }
 
-        stage('Start MySQL') {
-            steps {
-                echo "Démarrage du conteneur MySQL..."
-                sh '''
-                docker run -d --name $MYSQL_CONTAINER \
-                    --network $DOCKER_NETWORK \
-                    -e MYSQL_ROOT_PASSWORD=$DB_PASSWORD \
-                    -e MYSQL_DATABASE=$DB_DATABASE \
-                    mysql:8.0 || true
-                '''
-            }
-        }
-
-        stage('Wait for Database') {
-            steps {
-                echo "Attente que MySQL soit prêt..."
-                sh '''
-                until docker exec $MYSQL_CONTAINER \
-                    mysqladmin ping -h"localhost" -u$DB_USERNAME -p$DB_PASSWORD --silent; do
-                    sleep 2
-                done
-                '''
-                echo "MySQL est prêt !"
-            }
-        }
-
-        stage('Run Laravel in PHP container') {
+        stage('🧪 Build & Test') {
             steps {
                 script {
-                    // Exécution dans un conteneur PHP pour avoir un environnement propre
-                    docker.image('php:8.2-bullseye').inside("--network=$DOCKER_NETWORK") {
-
-                        echo "Installation des dépendances système et PHP..."
+                    // Utilisation de l'image officielle PHP Bullseye
+                    docker.image('php:8.2-bullseye').inside("--network=${env.NET_ID}") {
+                        echo "--- Installation des dépendances Système & PHP ---"
                         sh '''
-                        apt-get update -y
-                        apt-get install -y unzip git curl libzip-dev mariadb-client
-                        docker-php-ext-install pdo_mysql zip
+                            apt-get update -qq && apt-get install -y -qq libzip-dev mariadb-client unzip
+                            docker-php-ext-install pdo_mysql zip > /dev/null
+                            curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
                         '''
 
-                        echo "Installation de Composer..."
-                        sh '''
-                        curl -sS https://getcomposer.org/installer | php
-                        mv composer.phar /usr/local/bin/composer
-                        '''
+                        echo "--- Installation des dépendances Laravel ---"
+                        sh "composer install --no-interaction --prefer-dist --optimize-autoloader"
 
-                        echo "Installation des dépendances Laravel..."
-                        sh 'composer install --no-interaction --prefer-dist'
+                        echo "--- Configuration de l'environnement ---"
+                        sh """
+                            cp .env.example .env
+                            sed -i 's/DB_HOST=127.0.0.1/DB_HOST=${env.DB_ID}/' .env
+                            sed -i 's/DB_PASSWORD=/DB_PASSWORD=${env.DB_PASSWORD}/' .env
+                            sed -i 's/DB_DATABASE=laravel/DB_DATABASE=${env.DB_DATABASE}/' .env
+                            php artisan key:generate
+                        """
 
-                        echo "Configuration de Laravel..."
-                        sh '''
-                        cp .env.example .env.testing || true
-                        php artisan key:generate --env=testing --force
-                        '''
+                        echo "--- Attente de la base de données ---"
+                        sh """
+                            until mysqladmin ping -h${env.DB_ID} -u${env.DB_USERNAME} -p${env.DB_PASSWORD} --silent; do
+                                echo "En attente de MySQL..."
+                                sleep 3
+                            done
+                        """
 
-                        echo "Migration de la base de données..."
-                        sh 'php artisan migrate --env=testing --force'
-
-                        echo "Exécution des tests Laravel..."
-                        sh 'php artisan test --env=testing --without-tty'
+                        echo "--- Migration et Tests Unitaires ---"
+                        sh "php artisan migrate --force"
+                        sh "php artisan test --without-tty"
                     }
                 }
             }
@@ -91,20 +79,17 @@ pipeline {
 
     post {
         always {
-            // Encapsulé dans script pour éviter MissingContextVariableException
-            script {
-                echo "Nettoyage des conteneurs et du réseau Docker..."
-                sh 'docker rm -f $MYSQL_CONTAINER || true'
-                sh 'docker network rm $DOCKER_NETWORK || true'
-            }
+            echo "🧹 Nettoyage des ressources Docker..."
+            sh "docker rm -f ${env.DB_ID} || true"
+            sh "docker network rm ${env.NET_ID} || true"
         }
-
+        
         success {
-            echo "✅ Pipeline réussie : code stable"
+            echo "✅ BUILD TERMINÉ AVEC SUCCÈS"
         }
 
         failure {
-            echo "❌ Pipeline échouée : vérifier le code et les erreurs"
+            echo "❌ BUILD ÉCHOUÉ"
         }
     }
 }
