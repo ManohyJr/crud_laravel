@@ -2,49 +2,78 @@ pipeline {
     agent any
 
     environment {
-        DB_ID   = "db-${env.BUILD_NUMBER}"
-        NET_ID  = "net-${env.BUILD_NUMBER}"
-        PHP_IMG = "thecodingmachine/php:8.2-v4-cli"
+        // Identifiants uniques pour éviter les conflits entre builds
+        DB_HOST     = "db-${env.BUILD_NUMBER}"
+        NET_ID      = "net-${env.BUILD_NUMBER}"
+        
+        // Configuration de la base de données (reprise de ton GitLab)
+        MYSQL_DATABASE      = 'testing'
+        DB_CONNECTION       = 'mysql'
+        DB_PORT             = '3306'
+        DB_USERNAME         = 'root'
+        
+        // Récupération sécurisée du secret Jenkins
+        DB_PASS_SECRET      = credentials('laravel-db-password')
     }
 
     stages {
-        stage('🚀 Setup & Test') {
+        stage('🛠️ Initialisation Infra') {
             steps {
-                withCredentials([string(credentialsId: 'laravel-db-password', variable: 'DB_PASS')]) {
-                    script {
-                        echo "--- Infra ---"
-                        sh "docker network create ${NET_ID} || true"
-                        sh "docker run -d --name ${DB_ID} --network ${NET_ID} -e MYSQL_ROOT_PASSWORD=${DB_PASS} -e MYSQL_DATABASE=testing mysql:8.0"
+                script {
+                    echo "--- Création du réseau isolé ---"
+                    sh "docker network create ${NET_ID} || true"
 
-                        echo "--- Tests ---"
-                        sh """
-                            docker run --rm --network ${NET_ID} \
-                                -v \$(pwd):/usr/src/app \
-                                -w /usr/src/app \
-                                -e DB_PASSWORD=${DB_PASS} \
-                                ${PHP_IMG} \
-                                bash -c '
-                                    # On vérifie où on est
-                                    ls -la
-                                    
-                                    composer install --no-interaction --prefer-dist --quiet
-                                    
-                                    if [ -f .env.example ]; then
-                                        cp .env.example .env
-                                        sed -i "s/DB_HOST=127.0.0.1/DB_HOST=${DB_ID}/" .env
-                                        sed -i "s/DB_PASSWORD=/DB_PASSWORD=${DB_PASS}/" .env
-                                        php artisan key:generate
-                                    fi
+                    echo "--- Lancement du service MySQL ---"
+                    sh """
+                        docker run -d --name ${DB_HOST} \
+                            --network ${NET_ID} \
+                            -e MYSQL_ROOT_PASSWORD=${DB_PASS_SECRET} \
+                            -e MYSQL_DATABASE=${MYSQL_DATABASE} \
+                            mysql:8.0
+                    """
+                }
+            }
+        }
 
-                                    echo "Vérification MySQL..."
-                                    # Version simplifiée du test de connexion
-                                    sleep 10
-                                    
-                                    php artisan migrate --force
-                                    php artisan test --without-tty
-                                '
-                        """
-                    }
+        stage('🧪 Build & Tests Laravel') {
+            steps {
+                script {
+                    echo "--- Exécution des tests dans le conteneur PHP ---"
+                    // On monte le dossier actuel (pwd) dans /app du conteneur
+                    sh """
+                        docker run --rm --network ${NET_ID} \
+                            -v \$(pwd):/app \
+                            -w /app \
+                            -e DB_CONNECTION=${DB_CONNECTION} \
+                            -e DB_HOST=${DB_HOST} \
+                            -e DB_PORT=${DB_PORT} \
+                            -e DB_DATABASE=${MYSQL_DATABASE} \
+                            -e DB_USERNAME=${DB_USERNAME} \
+                            -e DB_PASSWORD=${DB_PASS_SECRET} \
+                            php:8.2-bullseye \
+                            bash -c '
+                                # 1. Installation des dépendances (Comme ton before_script)
+                                apt-get update -yqq && apt-get install -yqq libzip-dev zip unzip git mariadb-client > /dev/null
+                                docker-php-ext-install pdo_mysql zip > /dev/null
+                                curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer > /dev/null
+
+                                # 2. Préparation Laravel
+                                composer install --prefer-dist --no-interaction --quiet
+                                cp .env.example .env
+                                php artisan key:generate
+
+                                # 3. Attente de MySQL (Ta logique GitLab)
+                                echo "Attente du démarrage de MySQL sur ${DB_HOST}..."
+                                until mysqladmin ping -h"${DB_HOST}" -u"${DB_USERNAME}" -p"${DB_PASS_SECRET}" --silent; do 
+                                    sleep 2
+                                done
+                                echo "MySQL est prêt !"
+
+                                # 4. Migration et exécution des tests
+                                php artisan migrate --force
+                                php artisan test --without-tty
+                            '
+                    """
                 }
             }
         }
@@ -53,9 +82,17 @@ pipeline {
     post {
         always {
             script {
-                sh "docker rm -f ${DB_ID} || true"
+                echo "🧹 Nettoyage des ressources du build ${env.BUILD_NUMBER}..."
+                // On supprime le conteneur DB et le réseau pour libérer la RAM
+                sh "docker rm -f ${DB_HOST} || true"
                 sh "docker network rm ${NET_ID} || true"
             }
+        }
+        success {
+            echo "✅ Félicitations ! Tous les tests Laravel sont passés."
+        }
+        failure {
+            echo "❌ Le pipeline a échoué. Vérifie les logs de migration ou de test."
         }
     }
 }
