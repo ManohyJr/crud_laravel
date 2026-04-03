@@ -11,7 +11,7 @@ pipeline {
     }
 
     stages {
-        stage('Pipeline Complet') {
+        stage('Pipeline Complete') {
             steps {
                 script {
                     // 1. Nettoyage et lancement de la DB sur l'hôte (Debian)
