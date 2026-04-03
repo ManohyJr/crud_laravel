@@ -25,60 +25,34 @@ pipeline {
             }
         }
 
-        stage('Installer PHP et dépendances') {
+        stage('Laravel Full Setup & Test') {
             steps {
                 script {
                     docker.image('php:8.2-bullseye').inside('--network host -u root') {
                         sh '''
                             set -e
+
+                            # Installer dépendances système et PHP
                             apt-get update -yqq || (sleep 5 && apt-get update -yqq)
                             apt-get install -yqq libzip-dev zip unzip git default-mysql-client
                             docker-php-ext-install pdo_mysql zip > /dev/null 2>&1
-                            curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-                        '''
-                    }
-                }
-            }
-        }
 
-        stage('Configuration Laravel') {
-            steps {
-                script {
-                    docker.image('php:8.2-bullseye').inside('--network host -u root') {
-                        sh '''
-                            set -e
+                            # Installer Composer
+                            curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+                            # Laravel Setup
                             composer install --prefer-dist --no-interaction
                             cp .env.example .env.testing
                             php artisan key:generate --env=testing
-                        '''
-                    }
-                }
-            }
-        }
 
-        stage('Attente MySQL et Migrations') {
-            steps {
-                script {
-                    docker.image('php:8.2-bullseye').inside('--network host -u root') {
-                        sh '''
-                            set -e
+                            # Attendre MySQL
                             echo "Attente de la base de données..."
                             until mysqladmin ping -h"127.0.0.1" -u"root" -p"root" --silent; do
                                 sleep 2
                             done
-                            php artisan migrate --env=testing --force
-                        '''
-                    }
-                }
-            }
-        }
 
-        stage('Tests Laravel') {
-            steps {
-                script {
-                    docker.image('php:8.2-bullseye').inside('--network host -u root') {
-                        sh '''
-                            set -e
+                            # Migrations & Tests
+                            php artisan migrate --env=testing --force
                             php artisan test --env=testing
                         '''
                     }
