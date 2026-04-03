@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+        // Configuration pour que Laravel trouve MySQL sur l'hôte
         DB_CONNECTION = 'mysql'
         DB_HOST = '127.0.0.1'
         DB_PORT = '3306'
@@ -15,22 +16,26 @@ pipeline {
             agent {
                 docker {
                     image 'php:8.2-bullseye'
-                    // Ajout de --network=host pour le DNS et --entrypoint pour la stabilité
-                    args '-u root --network=host --entrypoint='''
+                    // Syntaxe simplifiée pour Debian 13 et Jenkins
+                    args '-u root --network=host'
                 }
             }
             steps {
                 sh '''
-                    # On vérifie la connexion avant de lancer apt
-                    ping -c 2 google.com || echo "Attention: Pas d'accès internet"
-                    
+                    # Installation des dépendances système
                     apt-get update -yqq
                     apt-get install -yqq libzip-dev zip unzip git default-mysql-client
+                    
+                    # Extensions PHP nécessaires pour Laravel
                     docker-php-ext-install pdo_mysql zip > /dev/null 2>&1
                     
+                    # Installation de Composer
                     curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer > /dev/null 2>&1
+                    
+                    # Installation des packages PHP
                     composer install --prefer-dist --no-ansi --no-interaction --no-progress
                 '''
+                // On sauvegarde le dossier vendor pour le stage suivant
                 stash includes: 'vendor/**', name: 'vendor-deps'
             }
         }
@@ -39,32 +44,39 @@ pipeline {
             agent {
                 docker {
                     image 'php:8.2-bullseye'
-                    args '-u root --network=host --entrypoint='''
+                    args '-u root --network=host'
                 }
             }
             steps {
                 unstash 'vendor-deps'
                 
-                // Lancement de MySQL directement sur l'hôte (puisqu'on est en --network=host)
-                sh 'docker rm -f mysql_test || true'
-                sh 'docker run -d --name mysql_test -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=testing -p 3306:3306 mysql:8.0'
-                
                 script {
+                    // On s'assure qu'aucun vieux conteneur MySQL ne traîne
+                    sh 'docker rm -f mysql_test || true'
+                    
+                    // Lancement du conteneur MySQL 8.0
+                    sh 'docker run -d --name mysql_test -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=testing -p 3306:3306 mysql:8.0'
+                    
                     try {
                         sh '''
+                            # Config Laravel
                             cp .env.example .env.testing
                             php artisan key:generate --env=testing
 
-                            echo "Attente de MySQL..."
+                            # Attente du démarrage réel de MySQL
+                            echo "Vérification de la connexion MySQL..."
                             until mysqladmin ping -h"127.0.0.1" -u"root" -p"root" --silent; do 
-                                sleep 2
+                                echo "MySQL n'est pas encore prêt..."
+                                sleep 3
                             done
-                            echo "MySQL est prêt !"
+                            echo "Connexion établie !"
 
+                            # Exécution des migrations et des tests
                             php artisan migrate --env=testing --force
                             php artisan test --env=testing
                         '''
                     } finally {
+                        // Très important sur Debian : on nettoie le conteneur après le test
                         sh 'docker rm -f mysql_test || true'
                     }
                 }
