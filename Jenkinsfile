@@ -8,38 +8,29 @@ pipeline {
         DB_DATABASE = 'testing'
         DB_USERNAME = 'root'
         DB_PASSWORD = 'root'
-        DOCKER_ARGS = '--network host -u root' // On centralise les arguments Docker
     }
 
     stages {
-        stage('Install Dependencies') {
+        stage('Pipeline Complet') {
             steps {
                 script {
-                    docker.image('php:8.2-bullseye').inside("${DOCKER_ARGS}") {
+                    // 1. Nettoyage et lancement de la DB sur l'hôte (Debian)
+                    sh 'docker rm -f mysql_test || true'
+                    sh 'docker run -d --name mysql_test -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=testing -p 3306:3306 mysql:8.0'
+                    
+                    // 2. Utilisation de PHP avec l'option --network host pour éviter les erreurs DNS
+                    docker.image('php:8.2-bullseye').inside('--network host -u root') {
                         sh '''
-                            apt-get update -yqq && apt-get install -yqq libzip-dev zip unzip git
+                            # On installe tout d'un coup
+                            apt-get update -yqq || (sleep 5 && apt-get update -yqq)
+                            apt-get install -yqq libzip-dev zip unzip git default-mysql-client
                             docker-php-ext-install pdo_mysql zip > /dev/null 2>&1
+                            
+                            # Installation Composer
                             curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+                            
+                            # Laravel Setup & Test
                             composer install --prefer-dist --no-interaction
-                        '''
-                    }
-                }
-                // On sauvegarde les dossiers vendor et .env pour les stages suivants
-                stash includes: '**', name: 'app-source'
-            }
-        }
-
-        stage('Setup Database') {
-            steps {
-                // On lance le conteneur MySQL sur l'hôte Debian
-                sh 'docker rm -f mysql_test || true'
-                sh 'docker run -d --name mysql_test -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=testing -p 3306:3306 mysql:8.0'
-                
-                script {
-                    docker.image('php:8.2-bullseye').inside("${DOCKER_ARGS}") {
-                        unstash 'app-source'
-                        sh '''
-                            apt-get update -yqq && apt-get install -yqq default-mysql-client
                             cp .env.example .env.testing
                             php artisan key:generate --env=testing
                             
@@ -49,33 +40,17 @@ pipeline {
                             done
                             
                             php artisan migrate --env=testing --force
+                            php artisan test --env=testing
                         '''
-                    }
-                }
-                // On re-stash pour inclure les changements (key:generate, migrations)
-                stash includes: '**', name: 'app-ready'
-            }
-        }
-
-        stage('Run Tests') {
-            steps {
-                script {
-                    docker.image('php:8.2-bullseye').inside("${DOCKER_ARGS}") {
-                        unstash 'app-ready'
-                        sh 'php artisan test --env=testing'
                     }
                 }
             }
         }
     }
-
+    
     post {
         always {
-            // Nettoyage systématique du conteneur MySQL
             sh 'docker rm -f mysql_test || true'
-        }
-        success {
-            echo "Félicitations Manohy ! Le pipeline Laravel est un succès."
         }
     }
 }
